@@ -1,2 +1,2 @@
-# regex-rust
-Regex implemented in rust
+# regex-zh
+Regex implemented by @zmbush and @copacetic
