@@ -77,17 +77,113 @@ impl Fragment {
     }
 }
 
+#[derive(Debug)]
+enum Tok {
+    Lit(char),
+    Any,
+    OneOrMore,
+    ZeroOrMore,
+    OneOrZero,
+    Or,
+    Concat
+}
+
+fn tokenize(re: &str) -> Result<Vec<Tok>, String> {
+    use Tok::*;
+    #[derive(Clone, Debug)]
+    struct Loc {
+        num_atom: i64,
+        num_alternatives: i64
+    }
+
+    macro_rules! has_atom { ($t:ident) => (if $t.num_atom == 0 {
+        return Err("num_atom == 0".to_owned());
+    }) }
+
+    macro_rules! maybe_concat { ($t:ident, $r:ident) => (if $t.num_atom > 1 {
+        $t.num_atom -= 1;
+        $r.push(Concat);
+    }) }
+
+    let mut retval = Vec::new();
+    let mut parens = Vec::new();
+    let mut current = Loc { num_atom: 0, num_alternatives: 0 };
+    for c in re.chars() {
+        match c {
+            '(' => {
+                maybe_concat!(current, retval);
+                parens.push(current.clone());
+                current.num_atom = 0;
+                current.num_alternatives = 0;
+            },
+            '|' => {
+                has_atom!(current);
+                maybe_concat!(current, retval);
+                current.num_alternatives += 1;
+            },
+            ')' => {
+                if parens.len() == 0 {
+                    return Err("Mismatched parens".to_owned());
+                }
+                has_atom!(current);
+                while current.num_atom > 1 {
+                    current.num_atom -= 1;
+                    retval.push(Concat);
+                }
+                while current.num_alternatives > 0 {
+                    current.num_alternatives -= 1;
+                    retval.push(Or);
+                }
+                current = match parens.pop() {
+                    Some(v) => v,
+                    None => return Err("Mismatched parens".to_owned())
+                };
+                current.num_atom += 1;
+            },
+            '*' | '+' | '?' => {
+                has_atom!(current);
+                retval.push(match c {
+                    '*' => ZeroOrMore,
+                    '+' => OneOrMore,
+                    '?' => OneOrZero,
+                    _ => unreachable!()
+                })
+            }
+            a => {
+                maybe_concat!(current, retval);
+                retval.push(match a {
+                    '.' => Any,
+                    b => Lit(b)
+                });
+                current.num_atom += 1;
+            }
+        }
+    }
+    if parens.len() > 0 {
+        return Err("Mismatched parens".to_owned());
+    }
+    while current.num_atom > 1 {
+        current.num_atom -= 1;
+        retval.push(Concat);
+    }
+    while current.num_alternatives > 0 {
+        retval.push(Or);
+    }
+    Ok(retval)
+}
+
 fn main() {
-    let re = "ab.a.";
+    let re = tokenize("...").unwrap();
+    println!("{:?}", re);
     let mut fragments: Vec<Fragment> = Vec::new();
-    for ch in re.chars() {
-        let newfrag = match ch {
-            '.' => {
+    for tok in re {
+        let newfrag = match tok {
+            Tok::Concat => {
                 let e2 = fragments.pop().expect("Found . without a previous fragment");
                 let e1 = fragments.pop().expect("Found . without two previous fragment");
                 e1.patch(e2)
             },
-            '+' => {
+            Tok::OneOrMore => {
                 let e = fragments.pop().expect("Found + without a previous fragment");
                 let s = e.state.clone();
                 e.patch(Fragment::new(State::Split {
@@ -95,13 +191,20 @@ fn main() {
                     two: State::tip()
                 }))
             },
-            a => {
+            Tok::Any => {
+                Fragment::new(State::Any {
+                    next: State::tip()
+                })
+            },
+            Tok::Lit(a) => {
                 Fragment::new(State::Lit {
                     val: format!("{}", a),
                     next: State::tip()
                 })
-            }
+            },
+            _ => unreachable!()
         };
         fragments.push(newfrag);
     }
+    println!("{:?}", fragments);
 }
